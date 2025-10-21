@@ -21,34 +21,45 @@ exchange = ccxt.binance({
 })
 
 # --- 从 .env 读取多币种配置 ---
-def parse_symbols_and_leverage(env_string):
-    """解析环境变量字符串，返回配置字典"""
+def parse_env_config():
+    """解析环境变量，返回配置字典"""
+    symbols = os.getenv('TRADE_SYMBOLS', '').split(',')
+    amounts = os.getenv('TRADE_AMOUNTS', '').split(',')
+    leverages = os.getenv('TRADE_LEVERAGES', '').split(',')
+
+    # 验证数量是否一致
+    if not (len(symbols) == len(amounts) == len(leverages)):
+        raise ValueError("TRADE_SYMBOLS, TRADE_AMOUNTS, TRADE_LEVERAGES 的数量不匹配")
+
     config = {}
-    if not env_string:
-        raise ValueError("SYMBOLS_AND_LEVERAGE 环境变量未设置或为空")
-    pairs = env_string.split(',')
-    for pair in pairs:
-        parts = pair.strip().split(':')
-        if len(parts) != 2:
-            raise ValueError(f"SYMBOLS_AND_LEVERAGE 格式错误: {pair}")
-        symbol, leverage_str = parts
+    for i in range(len(symbols)):
+        symbol = symbols[i].strip()
+        if not symbol:
+            continue # 跳过空字符串
+
         try:
-            leverage = int(leverage_str)
+            amount = float(amounts[i].strip())
         except ValueError:
-            raise ValueError(f"杠杆值必须为整数: {leverage_str}")
+            raise ValueError(f"TRADE_AMOUNTS 中的值必须为数字: {amounts[i]}")
+        try:
+            leverage = int(leverages[i].strip())
+        except ValueError:
+            raise ValueError(f"TRADE_LEVERAGES 中的值必须为整数: {leverages[i]}")
+
         # 从env读取测试模式设置
-        test_mode_str = os.getenv('DEFAULT_TEST_MODE', 'False').lower()
+        test_mode_str = os.getenv('TEST_MODE', 'False').lower()
         test_mode = test_mode_str in ['true', '1', 'yes', 'on']
+        
         config[symbol] = {
             'symbol': symbol,
             'leverage': leverage,
-            'timeframe': os.getenv('DEFAULT_TIMEFRAME', '15m'), # 从env读取默认周期
-            'amount': float(os.getenv('DEFAULT_AMOUNT', 0.001)), # 从env读取默认数量，并转换为float
-            'test_mode': test_mode, # 从env读取测试模式
+            'timeframe': os.getenv('TIMEFRAME', '15m'), # 从env读取周期
+            'amount': amount,
+            'test_mode': test_mode, # 使用TEST_MODE
         }
     return config
 
-TRADE_CONFIG = parse_symbols_and_leverage(os.getenv('SYMBOLS_AND_LEVERAGE'))
+TRADE_CONFIG = parse_env_config()
 
 # --- 全局变量 (改为字典以支持多币种) ---
 price_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
@@ -98,15 +109,20 @@ def get_ohlcv(symbol, timeframe='15m', limit=10):
         return None
 
 def get_positions():
-    """获取所有持仓情况"""
+    """获取所有持仓情况（修正 symbol 格式转换）"""
     try:
         # 获取所有持仓
         all_positions = exchange.fetch_positions()
         current_positions = {}
         for pos in all_positions:
-            symbol = pos['symbol']
-            # 只处理我们关心的币种
-            if symbol in TRADE_CONFIG:
+            exchange_symbol_full = pos['symbol'] # 从交易所获取的完整原始symbol，例如 'SOL/USDT:USDT'
+            # 尝试将交易所的完整 symbol 格式转换为TRADE_CONFIG中的格式（例如 'SOL/USDT'）
+            # Binance期货 pos['symbol'] 通常是 'BASE/QUOTE:QUOTE'，如 'SOL/USDT:USDT'
+            # 我们取冒号前的部分，即 'BASE/QUOTE'，如 'SOL/USDT'
+            config_symbol = exchange_symbol_full.split(':')[0] # 以冒号分割，取第一部分
+
+            # 检查转换后的 config_symbol 是否在我们的配置中
+            if config_symbol in TRADE_CONFIG:
                 position_amt = 0
                 if 'positionAmt' in pos.get('info', {}):
                     position_amt = float(pos['info']['positionAmt'])
@@ -118,17 +134,17 @@ def get_positions():
                         position_amt = contracts
                 if position_amt != 0:  # 有持仓
                     side = 'long' if position_amt > 0 else 'short'
-                    current_positions[symbol] = {
+                    current_positions[config_symbol] = { # 使用 config_symbol 作为键
                         'side': side,
                         'size': abs(position_amt),
                         'entry_price': float(pos.get('entryPrice', 0)),
                         'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
                         'position_amt': position_amt,
-                        'symbol': pos['symbol']
+                        'symbol': config_symbol # 存储config_symbol
                     }
                 else:
-                    # 确保没有持仓的币种在字典中被标记为 None
-                    current_positions[symbol] = None
+                    # 没有持仓，但存在于TRADE_CONFIG中
+                    current_positions[config_symbol] = None
         return current_positions
     except Exception as e:
         print(f"获取持仓失败: {e}")
@@ -175,8 +191,13 @@ def analyze_with_deepseek(price_data):
         signal_text_parts.append(f"信心: {last_signal.get('confidence', 'N/A')}")
         signal_text = "".join(signal_text_parts)
 
-    # 获取当前持仓信息
-    current_pos = positions.get(symbol)
+    # --- 关键修改：直接从API获取当前持仓信息 ---
+    # 调用 get_positions() 获取所有持仓
+    all_current_positions = get_positions()
+    # 从中提取当前 symbol 的持仓信息
+    current_pos = all_current_positions.get(symbol)
+    # --- 修改结束 ---
+
     position_text = "无持仓" if not current_pos else f"{current_pos['side']}仓, 数量: {current_pos['size']}, 盈亏: {current_pos['unrealized_pnl']:.2f}USDT"
 
     prompt = f"""
@@ -228,7 +249,7 @@ def analyze_with_deepseek(price_data):
         end_idx = result.rfind('}') + 1
         if start_idx == -1 or end_idx == 0:
              print(f"在 {symbol} 的回复中未找到有效的JSON对象: {result}")
-             return None
+             return None # 修正：找不到JSON对象时返回None
         json_str = result[start_idx:end_idx]
         # print(f"[DEBUG] 提取的JSON字符串 for {symbol}: {json_str}") # 调试：打印提取的JSON - 已注释
         signal_data = None
@@ -240,9 +261,9 @@ def analyze_with_deepseek(price_data):
             # print(f"[DEBUG] 标准json库解析 {symbol} 失败: {e}") # 调试：打印解析结果 - 已注释
             # 如果标准库失败，尝试使用json5库，它更宽容
             try:
-                signal_data = json5.loads(json_str)
+                signal_data = json5.loads(json_str) # 修正：json5.loads 使用 ValueError
                 # print(f"[DEBUG] 使用json5库解析 {symbol} 成功") # 调试：打印解析结果 - 已注释
-            except json5.JSON5Exception as e2:
+            except ValueError as e2: # 修正：捕获 ValueError
                 # print(f"[DEBUG] json5库解析 {symbol} 也失败: {e2}") # 调试：打印解析结果 - 已注释
                 # 如果都失败了，尝试手动修复一些常见的问题（例如单引号）
                 # 这个修复非常基础，可能不适用于所有情况
@@ -258,7 +279,10 @@ def analyze_with_deepseek(price_data):
                 except json.JSONDecodeError as e3:
                     # print(f"[DEBUG] 简单修复后解析 {symbol} 仍失败: {e3}") # 调试：打印解析结果 - 已注释
                     print(f"解析 {symbol} 的DeepSeek回复失败: 所有方法均尝试但失败。") # 提示解析失败
-                    return None # 所有方法都失败
+                    print(f"原始回复: {result}") # 打印原始回复以便检查
+                    print(f"尝试解析的JSON片段: {json_str}") # 打印尝试解析的片段
+                    return None # 修正：所有方法都失败时返回None
+                    # 所有方法都失败
 
         # --- 解析成功后的处理 ---
         signal_data['timestamp'] = price_data['timestamp']
@@ -276,7 +300,12 @@ def analyze_with_deepseek(price_data):
 def execute_trade(symbol, signal_data, price_data):
     """执行指定币种的交易"""
     config = TRADE_CONFIG[symbol]
-    current_position = positions.get(symbol)
+    # --- 关键修改：直接从API获取执行前的当前持仓信息 ---
+    # 调用 get_positions() 获取所有持仓
+    all_current_positions = get_positions()
+    # 从中提取当前 symbol 的持仓信息
+    current_position = all_current_positions.get(symbol)
+    # --- 修改结束 ---
     print(f"--- 执行 {symbol} 交易 ---")
     print(f"交易信号: {signal_data['signal']}")
     print(f"信心程度: {signal_data['confidence']}")
@@ -290,15 +319,19 @@ def execute_trade(symbol, signal_data, price_data):
         return
 
     try:
+        # 使用配置中的数量
+        amount = config['amount']
+        print(f"使用配置数量: {amount} {symbol.split('/')[0]}")
+
         if signal_data['signal'] == 'BUY':
             if current_position and current_position['side'] == 'short':
                 print(f"平{symbol}空仓并开多仓...")
                 exchange.create_market_buy_order(symbol, current_position['size'])
                 time.sleep(1)
-                exchange.create_market_buy_order(symbol, config['amount'])
+                exchange.create_market_buy_order(symbol, amount)
             elif not current_position:
                 print(f"开{symbol}多仓...")
-                exchange.create_market_buy_order(symbol, config['amount'])
+                exchange.create_market_buy_order(symbol, amount)
             else:
                 print(f"已持有{symbol}多仓，无需操作")
 
@@ -307,10 +340,10 @@ def execute_trade(symbol, signal_data, price_data):
                 print(f"平{symbol}多仓并开空仓...")
                 exchange.create_market_sell_order(symbol, current_position['size'])
                 time.sleep(1)
-                exchange.create_market_sell_order(symbol, config['amount'])
+                exchange.create_market_sell_order(symbol, amount)
             elif not current_position:
                 print(f"开{symbol}空仓...")
-                exchange.create_market_sell_order(symbol, config['amount'])
+                exchange.create_market_sell_order(symbol, amount)
             else:
                 print(f"已持有{symbol}空仓，无需操作")
 
@@ -319,10 +352,10 @@ def execute_trade(symbol, signal_data, price_data):
             return
 
         print(f"{symbol} 订单执行成功")
-        time.sleep(2) # 等待交易所更新
+        time.sleep(3) # 增加延迟，等待交易所更新
         # 更新持仓信息 (获取所有持仓，然后只更新当前symbol的持仓)
-        all_pos = get_positions()
-        positions[symbol] = all_pos.get(symbol)
+        all_pos = get_positions() # 调用修正后的函数
+        positions[symbol] = all_pos.get(symbol) # 更新全局持仓字典
         print(f"{symbol} 更新后持仓: {positions[symbol]}")
 
     except Exception as e:
@@ -338,7 +371,7 @@ def run_single_strategy(symbol):
     print("=" * 60)
     config = TRADE_CONFIG[symbol]
     price_data = get_ohlcv(symbol, config['timeframe'])
-    if not price_data: # 修正语法错误
+    if not price_data: # 修正语法错误：完整变量名
         print(f"获取 {symbol} 数据失败，跳过此次执行。")
         return
 
@@ -347,7 +380,7 @@ def run_single_strategy(symbol):
     print(f"价格变化: {price_data['price_change']:+.2f}%")
 
     signal_data = analyze_with_deepseek(price_data)
-    if not signal_data: # 修正语法错误
+    if not signal_data: # 修正语法错误：完整变量名
         print(f"分析 {symbol} 失败，跳过此次执行。")
         return
 
@@ -358,7 +391,7 @@ def main():
     print("多币种自动交易机器人启动成功！")
     print(f"配置的交易对: {list(TRADE_CONFIG.keys())}")
     for symbol, config in TRADE_CONFIG.items():
-        print(f"  - {symbol}: 杠杆 {config['leverage']}x, 周期 {config['timeframe']}, 测试模式: {config['test_mode']}")
+        print(f"  - {symbol}: 杠杆 {config['leverage']}x, 周期 {config['timeframe']}, 数量 {config['amount']}, 测试模式: {config['test_mode']}")
 
     if not setup_exchange():
         print("交易所初始化失败，程序退出")
