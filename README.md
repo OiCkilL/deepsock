@@ -1,24 +1,24 @@
-个人喜欢玩黑箱文化，你们不一样，别上头。
+# DeepSock - DeepSeek 多币种期货交易机器人
 
-配置文件建在策略根目录
+一个基于 DeepSeek API 分析市场并使用 Binance Future API 执行交易的 Python 自动交易机器人。
 
-文件名字
+## 功能
 
+*   **多币种支持**: 可同时监控和交易多个合约。
+*   **AI 分析**: 利用 DeepSeek 生成交易信号、止损止盈和信心度。
+*   **实时持仓**: 准确获取并显示 API 返回的实时持仓信息。
+*   **格式化输出**: 持仓信息以易读格式展示。
+*   **灵活配置**: 通过 `.env` 文件配置币种、数量、杠杆等参数。
 
-.env
-单向持仓 模式
+## 依赖
 
-内容
+*   `python 3.x`
+*   `openai`, `ccxt`, `pandas`, `schedule`, `json5`, `python-dotenv`
 
+## 使用
 
-DEEPSEEK_API_KEY= 你的deepseek  api密钥
+1.  安装依赖: `pip install -r requirements.txt` (请自行创建)
+2.  配置 `.env` 文件 (参考 `.env.example` 格式)。
+3.  运行: `python deepsock.py` (或您的主脚本文件名)
 
-BINANCE_API_KEY=
-
-BINANCE_SECRET=
-
-OKX_API_KEY=
-
-OKX_SECRET=
-
-OKX_PASSWORD=
+**警告: 期货交易风险高，请谨慎使用。**
