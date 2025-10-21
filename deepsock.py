@@ -152,6 +152,13 @@ def get_positions():
         traceback.print_exc()
         return {}
 
+def format_position_info(pos):
+    """将持仓字典格式化为易读的字符串"""
+    if not pos:
+        return "无持仓"
+    side_text = "多" if pos['side'] == 'long' else '空'
+    return f"{side_text}仓, 数量: {pos['size']}, 入场价: ${pos['entry_price']:.2f}, 未实现盈亏: ${pos['unrealized_pnl']:.2f}USDT"
+
 def analyze_with_deepseek(price_data):
     """使用DeepSeek分析指定币种的市场并生成交易信号"""
     symbol = price_data['symbol']
@@ -198,7 +205,7 @@ def analyze_with_deepseek(price_data):
     current_pos = all_current_positions.get(symbol)
     # --- 修改结束 ---
 
-    position_text = "无持仓" if not current_pos else f"{current_pos['side']}仓, 数量: {current_pos['size']}, 盈亏: {current_pos['unrealized_pnl']:.2f}USDT"
+    position_text = format_position_info(current_pos) # 调用格式化函数
 
     prompt = f"""
     你是一个专业的加密货币交易分析师。请基于以下{symbol} {TRADE_CONFIG[symbol]['timeframe']}周期数据进行分析：
@@ -312,7 +319,7 @@ def execute_trade(symbol, signal_data, price_data):
     print(f"理由: {signal_data['reason']}")
     print(f"止损: ${signal_data['stop_loss']:,.2f}")
     print(f"止盈: ${signal_data['take_profit']:,.2f}")
-    print(f"当前持仓: {current_position}")
+    print(f"当前持仓: {format_position_info(current_position)}") # 调用格式化函数
 
     if config['test_mode']:
         print("测试模式 - 仅模拟交易")
@@ -356,7 +363,7 @@ def execute_trade(symbol, signal_data, price_data):
         # 更新持仓信息 (获取所有持仓，然后只更新当前symbol的持仓)
         all_pos = get_positions() # 调用修正后的函数
         positions[symbol] = all_pos.get(symbol) # 更新全局持仓字典
-        print(f"{symbol} 更新后持仓: {positions[symbol]}")
+        print(f"{symbol} 更新后持仓: {format_position_info(positions[symbol])}") # 调用格式化函数
 
     except Exception as e:
         print(f"{symbol} 订单执行失败: {e}")
