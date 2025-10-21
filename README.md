@@ -17,8 +17,8 @@
 
 ## 使用
 
-1.  安装依赖: `pip install -r requirements.txt` (请自行创建)
+1.  安装依赖: `pip install -r requirements.txt` 
 2.  配置 `.env` 文件 (参考 `.env.example` 格式)。
-3.  运行: `python deepsock.py` (或您的主脚本文件名)
+3.  运行: `python deepsock.py` 
 
 **警告: 期货交易风险高，请谨慎使用。**
