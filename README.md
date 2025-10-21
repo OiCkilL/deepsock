@@ -1,6 +1,11 @@
-# DeepSock - DeepSeek 多币种期货交易机器人
+# DeepSock - DeepSeek 多币种合约交易机器人
 
 一个基于 DeepSeek API 分析市场并使用 Binance Future API 执行交易的 Python 自动交易机器人。
+
+## 版本
+
+*   **`deepsock.py`**: 标准版，基于 K 线、技术指标和持仓信息进行 AI 分析。
+*   **`deepsock_ai.py`**: 增强版，在标准版基础上整合了 BlockBeats 实时新闻，为 AI 决策提供更多市场信息。
 
 ## 功能
 
@@ -13,12 +18,14 @@
 ## 依赖
 
 *   `python 3.x`
-*   `openai`, `ccxt`, `pandas`, `schedule`, `json5`, `python-dotenv`
+*   `openai`, `ccxt`, `pandas`, `schedule`, `json5`, `feedparser`, `python-dotenv`
 
 ## 使用
 
 1.  安装依赖: `pip install -r requirements.txt` 
 2.  配置 `.env` 文件 (参考 `.env.example` 格式)。
-3.  运行: `python deepsock.py` 
+3.  运行:
+    *   标准版: `python deepsock.py`
+    *   新闻增强版: `python deepsock_ai.py`
 
-**警告: 期货交易风险高，请谨慎使用。**
+**警告: 加密货币交易风险高，请谨慎使用。**
