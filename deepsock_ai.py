@@ -468,7 +468,7 @@ def run_single_strategy(symbol, news_text=""):
     print(f"价格变化: {price_data['price_change']:+.2f}%")
 
     signal_data = analyze_with_deepseek(price_data) # 无需传递news_text，从全局变量获取
-    if not signal_ # 修正语法错误：完整变量名
+    if not signal_data: # 修正语法错误：完整变量名
         print(f"分析 {symbol} 失败，跳过此次执行。")
         return
 
