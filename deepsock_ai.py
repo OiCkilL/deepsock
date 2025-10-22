@@ -68,6 +68,30 @@ price_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
 signal_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
 positions = {symbol: None for symbol in TRADE_CONFIG.keys()}
 
+# --- 全局新闻变量 ---
+latest_news_text = "【最新市场新闻】\n无近期新闻。\n" # 初始化新闻内容
+last_news_hash = None # 用于存储上一次新闻内容的哈希值
+
+# --- 从 .env 读取 RSS 配置 ---
+def parse_rss_config():
+    """解析环境变量中的RSS配置"""
+    rss_urls_str = os.getenv('RSS_FEED_URLS', '')
+    if not rss_urls_str:
+        raise ValueError("RSS_FEED_URLS 环境变量未设置或为空")
+    # 以逗号分割多个URL
+    urls = [url.strip() for url in rss_urls_str.split(',')]
+    # 验证每个URL是否以 http:// 或 https:// 开头
+    for url in urls:
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError(f"RSS URL 格式无效: {url}")
+    return urls
+
+RSS_FEED_URLS = parse_rss_config()
+RSS_CHECK_INTERVAL_MINUTES = int(os.getenv('RSS_CHECK_INTERVAL_MINUTES', '5'))
+
+print(f"[CONFIG] RSS 源: {RSS_FEED_URLS}")
+print(f"[CONFIG] RSS 检查间隔: {RSS_CHECK_INTERVAL_MINUTES} 分钟")
+
 # --- 核心函数 ---
 def setup_exchange():
     """设置交易所参数，为所有配置的币种设置杠杆"""
@@ -162,27 +186,56 @@ def format_position_info(pos):
     return f"{side_text}仓, 数量: {pos['size']}, 入场价: ${pos['entry_price']:.2f}, 未实现盈亏: ${pos['unrealized_pnl']:.2f}USDT"
 
 def get_latest_news():
-    """获取最新的 BlockBeats 新闻"""
+    """获取多个 RSS 源的最新新闻"""
     try:
-        feed_url = "https://api.theblockbeats.news/v2/rss/newsflash"
-        feed = feedparser.parse(feed_url)
+        all_entries = []
+        for feed_url in RSS_FEED_URLS:
+            print(f"[NEWS FETCH] 正在获取 {feed_url} ...")
+            feed = feedparser.parse(feed_url)
+            # 获取每个源最近的几条新闻（例如，最近5条）
+            recent_entries = feed.entries[:5] if feed.entries else []
+            all_entries.extend(recent_entries)
         
-        # 获取最近的几条新闻（例如，最近5条）
-        recent_entries = feed.entries[:5] if feed.entries else []
+        # 按发布时间排序，取最新的几条（例如，总共10条）
+        all_entries.sort(key=lambda x: x.get('published_parsed', x.get('updated_parsed', None)), reverse=True)
+        recent_entries = all_entries[:10]
+
         news_text_parts = ["【最新市场新闻】\n"]
-        
         for entry in recent_entries:
             # 提取标题和摘要（description 通常包含摘要）
             title = entry.get('title', 'No Title')
             summary = entry.get('description', 'No Summary')
-            news_text_parts.append(f"标题: {title}\n摘要: {summary}\n---\n")
+            # 尝试获取发布日期，如果无法解析则跳过
+            pub_date_struct = entry.get('published_parsed', entry.get('updated_parsed', None))
+            if pub_date_struct:
+                pub_date = time.strftime('%Y-%m-%d %H:%M:%S', pub_date_struct)
+                news_text_parts.append(f"[{pub_date}] 标题: {title}\n摘要: {summary}\n---\n")
+            else:
+                news_text_parts.append(f"标题: {title}\n摘要: {summary}\n---\n")
         
         return "".join(news_text_parts) if len(news_text_parts) > 1 else "【最新市场新闻】\n无近期新闻。\n"
     except Exception as e:
         print(f"获取新闻失败: {e}")
+        import traceback
+        traceback.print_exc()
         return "【最新市场新闻】\n获取新闻时发生错误。\n"
 
-def analyze_with_deepseek(price_data, news_text=""):
+def fetch_and_update_news():
+    """获取新闻并更新全局变量，仅在内容变化时更新"""
+    global latest_news_text, last_news_hash
+    current_news_text = get_latest_news()
+    current_news_hash = hash(current_news_text) # 计算当前新闻内容的哈希值
+
+    # 检查内容是否发生变化
+    if current_news_hash != last_news_hash:
+        print(f"[NEWS UPDATE] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 获取到新新闻:")
+        print(current_news_text)
+        latest_news_text = current_news_text
+        last_news_hash = current_news_hash # 更新哈希值
+    else:
+        print(f"[NEWS CHECK] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 新闻内容无变化，跳过更新。")
+
+def analyze_with_deepseek(price_data):
     """使用DeepSeek分析指定币种的市场并生成交易信号"""
     symbol = price_data['symbol']
     # 添加当前价格到对应币种的历史记录
@@ -229,6 +282,10 @@ def analyze_with_deepseek(price_data, news_text=""):
     # --- 修改结束 ---
 
     position_text = format_position_info(current_pos) # 调用格式化函数
+
+    # --- 从全局变量获取最新的新闻内容 ---
+    news_text = latest_news_text
+    # --- 修改结束 ---
 
     prompt = f"""
     你是一个专业的加密货币交易分析师。请基于以下{symbol} {TRADE_CONFIG[symbol]['timeframe']}周期数据进行分析：
@@ -410,8 +467,8 @@ def run_single_strategy(symbol, news_text=""):
     print(f"数据周期: {config['timeframe']}")
     print(f"价格变化: {price_data['price_change']:+.2f}%")
 
-    signal_data = analyze_with_deepseek(price_data, news_text) # 将新闻文本传递给 analyze_with_deepseek
-    if not signal_data: # 修正语法错误：完整变量名
+    signal_data = analyze_with_deepseek(price_data) # 无需传递news_text，从全局变量获取
+    if not signal_ # 修正语法错误：完整变量名
         print(f"分析 {symbol} 失败，跳过此次执行。")
         return
 
@@ -428,14 +485,18 @@ def main():
         print("交易所初始化失败，程序退出")
         return
 
+    # --- 新增：启动新闻获取调度任务 ---
+    print(f"启动新闻获取调度任务 (每 {RSS_CHECK_INTERVAL_MINUTES} 分钟检查一次)...")
+    schedule.every(RSS_CHECK_INTERVAL_MINUTES).minutes.do(fetch_and_update_news)
+    # 立即获取一次新闻
+    fetch_and_update_news()
+    # --- 修改结束 ---
+
     def run_all_strategies():
         """为所有配置的币种运行一次策略，共享新闻"""
-        # --- 新增：在所有币种分析前获取并打印一次新闻 ---
-        news_text = get_latest_news()
-        print(news_text) # 打印新闻到屏幕
-        # --- 修改结束 ---
+        # 不再在这里获取新闻，因为新闻由独立任务更新
         for symbol in TRADE_CONFIG.keys():
-            run_single_strategy(symbol, news_text) # 将新闻传递给每个币种的策略
+            run_single_strategy(symbol) # 不再传递news_text参数
 
     # 为每个配置的币种设置独立的调度任务，但指向同一个 run_all_strategies 函数
     timeframe = next(iter(TRADE_CONFIG.values()))['timeframe'] # 取第一个币种的timeframe作为调度依据
