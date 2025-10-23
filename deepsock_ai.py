@@ -8,14 +8,25 @@ from datetime import datetime
 import json
 import json5 # 用于解析可能非标准的JSON
 import feedparser # 用于解析RSS
+import math # 用于数学计算 (floor)
 from dotenv import load_dotenv
 load_dotenv()
 
-# --- 初始化 ---
-deepseek_client = OpenAI(
-    api_key=os.getenv('DEEPSEEK_API_KEY'),
-    base_url="https://api.deepseek.com"
+# --- 从 .env 读取 LLM 配置并初始化客户端 ---
+LLM_API_KEY = os.getenv('LLM_API_KEY')
+LLM_BASE_URL = os.getenv('LLM_BASE_URL', 'https://api.deepseek.com') # 提供默认值
+LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'deepseek-chat')       # 提供默认值
+
+print(f"[CONFIG] LLM API Key: {'*' * len(LLM_API_KEY) if LLM_API_KEY else 'NOT SET'}")
+print(f"[CONFIG] LLM Base URL: {LLM_BASE_URL}")
+print(f"[CONFIG] LLM Model Name: {LLM_MODEL_NAME}")
+
+# --- 初始化 LLM 客户端 (OpenAI 兼容) ---
+llm_client = OpenAI(
+    api_key=LLM_API_KEY,
+    base_url=LLM_BASE_URL
 )
+
 exchange = ccxt.binance({
     'options': {'defaultType': 'future'},
     'apiKey': os.getenv('BINANCE_API_KEY'),
@@ -26,12 +37,12 @@ exchange = ccxt.binance({
 def parse_env_config():
     """解析环境变量，返回配置字典"""
     symbols = os.getenv('TRADE_SYMBOLS', '').split(',')
-    amounts = os.getenv('TRADE_AMOUNTS', '').split(',')
+    # amounts = os.getenv('TRADE_AMOUNTS', '').split(',') # 移除固定数量配置
     leverages = os.getenv('TRADE_LEVERAGES', '').split(',')
 
-    # 验证数量是否一致
-    if not (len(symbols) == len(amounts) == len(leverages)):
-        raise ValueError("TRADE_SYMBOLS, TRADE_AMOUNTS, TRADE_LEVERAGES 的数量不匹配")
+    # 验证数量是否一致 (只需要 symbols 和 leverages)
+    if not (len(symbols) == len(leverages)): # 修改验证条件
+        raise ValueError("TRADE_SYMBOLS 和 TRADE_LEVERAGES 的数量不匹配") # 修改错误信息
 
     config = {}
     for i in range(len(symbols)):
@@ -39,10 +50,12 @@ def parse_env_config():
         if not symbol:
             continue # 跳过空字符串
 
-        try:
-            amount = float(amounts[i].strip())
-        except ValueError:
-            raise ValueError(f"TRADE_AMOUNTS 中的值必须为数字: {amounts[i]}")
+        # 移除 amount 的解析逻辑
+        # try:
+        #     amount = float(amounts[i].strip())
+        # except ValueError:
+        #     raise ValueError(f"TRADE_AMOUNTS 中的值必须为数字: {amounts[i]}")
+
         try:
             leverage = int(leverages[i].strip())
         except ValueError:
@@ -51,17 +64,38 @@ def parse_env_config():
         # 从env读取测试模式设置
         test_mode_str = os.getenv('TEST_MODE', 'False').lower()
         test_mode = test_mode_str in ['true', '1', 'yes', 'on']
-        
+
         config[symbol] = {
             'symbol': symbol,
             'leverage': leverage,
             'timeframe': os.getenv('TIMEFRAME', '15m'), # 从env读取周期
-            'amount': amount,
+            # 'amount': amount, # 移除固定 amount
             'test_mode': test_mode, # 使用TEST_MODE
         }
     return config
 
 TRADE_CONFIG = parse_env_config()
+
+# --- 从 .env 读取风险管理配置 ---
+def parse_risk_management_config():
+    """解析环境变量中的风险管理配置"""
+    config = {}
+
+    # 从环境变量读取，提供默认值
+    config['max_risk_per_trade'] = float(os.getenv('MAX_RISK_PER_TRADE', '0.02')) # 默认 2%
+    config['max_total_risk'] = float(os.getenv('MAX_TOTAL_RISK', '0.1'))         # 默认 10%
+    config['max_consecutive_losses'] = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '3')) # 默认 3次
+    config['stop_loss_multiplier'] = float(os.getenv('STOP_LOSS_MULTIPLIER', '1.5')) # 默认 1.5倍
+    config['take_profit_multiplier'] = float(os.getenv('TAKE_PROFIT_MULTIPLIER', '2.0')) # 默认 2.0倍
+    config['max_positions'] = int(os.getenv('MAX_POSITIONS', '5'))                   # 默认 5个
+    config['balance_warning_level'] = float(os.getenv('BALANCE_WARNING_LEVEL', '100')) # 默认 100 USDT
+    config['max_drawdown'] = float(os.getenv('MAX_DRAWDOWN', '0.2'))                 # 默认 20%
+
+    return config
+
+RISK_MANAGEMENT_CONFIG = parse_risk_management_config()
+print(f"[CONFIG] 风险管理配置: {RISK_MANAGEMENT_CONFIG}")
+
 
 # --- 全局变量 (改为字典以支持多币种) ---
 price_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
@@ -96,7 +130,7 @@ print(f"[CONFIG] RSS 检查间隔: {RSS_CHECK_INTERVAL_MINUTES} 分钟")
 def setup_exchange():
     """设置交易所参数，为所有配置的币种设置杠杆"""
     try:
-        balance = exchange.fetch_balance()
+        balance = exchange.fetch_balance({'type': 'future'}) # 明确获取期货账户余额
         usdt_balance = balance['USDT']['free']
         print(f"当前USDT余额: {usdt_balance:.2f}")
         for symbol, config in TRADE_CONFIG.items():
@@ -195,7 +229,7 @@ def get_latest_news():
             # 获取每个源最近的几条新闻（例如，最近5条）
             recent_entries = feed.entries[:5] if feed.entries else []
             all_entries.extend(recent_entries)
-        
+
         # 按发布时间排序，取最新的几条（例如，总共10条）
         all_entries.sort(key=lambda x: x.get('published_parsed', x.get('updated_parsed', None)), reverse=True)
         recent_entries = all_entries[:10]
@@ -212,7 +246,7 @@ def get_latest_news():
                 news_text_parts.append(f"[{pub_date}] 标题: {title}\n摘要: {summary}\n---\n")
             else:
                 news_text_parts.append(f"标题: {title}\n摘要: {summary}\n---\n")
-        
+
         return "".join(news_text_parts) if len(news_text_parts) > 1 else "【最新市场新闻】\n无近期新闻。\n"
     except Exception as e:
         print(f"获取新闻失败: {e}")
@@ -236,7 +270,7 @@ def fetch_and_update_news():
         print(f"[NEWS CHECK] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 新闻内容无变化，跳过更新。")
 
 def analyze_with_deepseek(price_data):
-    """使用DeepSeek分析指定币种的市场并生成交易信号"""
+    """使用LLM分析指定币种的市场并生成交易信号"""
     symbol = price_data['symbol']
     # 添加当前价格到对应币种的历史记录
     price_history[symbol].append(price_data)
@@ -287,8 +321,17 @@ def analyze_with_deepseek(price_data):
     news_text = latest_news_text
     # --- 修改结束 ---
 
+    # --- 新增：从全局变量获取风险管理配置 ---
+    risk_config = RISK_MANAGEMENT_CONFIG
+    # --- 修改结束 ---
+
+    # --- 关键修改：更新 Prompt，强调风险管理和严重后果，并要求 position_percentage ---
     prompt = f"""
-    你是一个专业的加密货币交易分析师。请基于以下{symbol} {TRADE_CONFIG[symbol]['timeframe']}周期数据进行分析：
+    你是一个专业的、极度谨慎的加密货币交易分析师。你的每一个决策都关系到一个家庭的生死存亡。
+    **背景**：交易者的母亲身患癌症，这是最后的治疗机会。账户里的每一分钱都是救命钱。任何一次失控的风险都可能导致治疗资金耗尽，后果不堪设想。**仓位控制失败 = 血本无归 = 全家等死**。
+    **你的职责**：在确保资金安全的前提下，追求稳健的盈利。永远记住：保住本金比什么都重要！
+
+    **请基于以下{symbol} {TRADE_CONFIG[symbol]['timeframe']}周期数据进行分析**：
     {kline_text}
     {indicator_text}
     {signal_text}
@@ -301,92 +344,159 @@ def analyze_with_deepseek(price_data):
     - 本K线成交量: {price_data['volume']:.2f} {symbol.split('/')[0]}
     - 价格变化: {price_data['price_change']:+.2f}%
     - 当前持仓: {position_text}
-    【分析要求】
-    1. 基于{TRADE_CONFIG[symbol]['timeframe']}K线趋势、技术指标和新闻信息给出交易信号: BUY(买入) / SELL(卖出) / HOLD(观望)
-    2. 简要分析理由（考虑趋势连续性、支撑阻力、成交量、新闻事件对市场情绪和价格的潜在影响等因素）
-    3. 基于技术分析和新闻事件建议合理的止损价位
-    4. 基于技术分析和新闻事件建议合理的止盈价位
-    5. 评估信号信心程度
-    请用以下JSON格式回复：
+
+    **【强制风险管理规则】**
+    1.  **单笔最大风险**：本次交易所能承受的最大损失不得超过账户总资金的 {risk_config['max_risk_per_trade'] * 100:.2f}%。
+    2.  **止损设置**：必须设置合理的止损。止损距离应参考近期波动率（如ATR），但不得过于宽松。
+    3.  **止盈目标**：设定现实的止盈目标，盈亏比（Reward/Risk）应至少达到 {risk_config['take_profit_multiplier'] / risk_config['stop_loss_multiplier']:.2f}:1。
+    4.  **仓位控制**：根据信号信心和止损距离动态计算仓位。**任何违反规则的仓位建议都将被视为致命错误**。
+    5.  **总体风险**：密切关注账户整体表现，避免超过最大总亏损 {risk_config['max_total_risk'] * 100:.2f}% 或连续 {risk_config['max_consecutive_losses']} 次亏损。
+    6.  **持仓限制**：账户同时持有的币种数量不应超过 {risk_config['max_positions']} 个。
+    7.  **资金警戒**：账户余额一旦跌破 {risk_config['balance_warning_level']:.2f} USDT，必须极其保守。
+
+    【分析与决策要求】
+    1.  **首要任务：风险评估**。在给出任何交易信号之前，**必须**详细说明本次交易所涉及的具体风险（例如：若按建议止损，将损失账户总资金的百分之多少）。
+    2.  **交易信号**: BUY(买入) / SELL(卖出) / HOLD(观望)。
+    3.  **决策理由**：简要分析市场趋势、技术指标、新闻事件如何影响价格，并明确指出风险点。
+    4.  **止损价位**: 基于技术分析和风险管理规则设定一个**坚决**的止损价格。
+    5.  **止盈价位**: 基于技术分析和风险管理规则设定一个现实的止盈价格。
+    6.  **信号信心**: HIGH(高) / MEDIUM(中) / LOW(低)，并说明原因。
+    7.  **风险量化**: **精确计算**如果价格触及止损，本次交易所损失的账户总资金百分比（例如 1.5%）。
+    8.  **仓位建议**: 基于风险量化和信号信心，建议使用账户总资金的百分之多少（例如 3.2%）来执行本次交易。**此建议必须严格遵守上述风险管理规则**。
+
+    **请用以下JSON格式回复**：
     {{
         "signal": "BUY|SELL|HOLD",
-        "reason": "分析理由",
+        "reason": "详细的分析理由，包括市场解读和明确的风险点",
         "stop_loss": 具体价格,
         "take_profit": 具体价格,
-        "confidence": "HIGH|MEDIUM|LOW"
+        "confidence": "HIGH|MEDIUM|LOW",
+        "risk_assessment": "本次交易所涉及的具体风险评估，例如：若价格触及止损($XX.XX)，将损失账户总资金的 X.XX%",
+        "position_percentage": 建议使用的资金百分比 (例如 3.2 表示 3.2%)
     }}
+
+    **再次强调**：你的每一个决策都关乎生命。请务必严谨、保守，严格遵守风险管理规则。任何疏忽都可能导致灾难性的后果。
     """
+    # --- 修改结束 ---
+
 
     try:
         # --- 使用更新后的系统提示词 ---
-        system_prompt = f"您是一位走投无路的交易员，您的母亲身患癌症，病情危急，医生说这是最后的治疗机会。您仅有的积蓄和全部希望都投入到这个账户中，必须在短时间内通过{TRADE_CONFIG[symbol]['timeframe']}周期的交易赚取足够的救命钱。请全力以赴，结合K线形态、技术指标和最新市场新闻做出最精准的判断。"
-        response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+        system_prompt = f"""
+        你是走投无路的加密货币交易员。你的母亲身患绝症，唯一的希望就是账户里的这笔钱。**每一笔交易都赌上了全家人的未来**。
+        你的任务是利用{TRADE_CONFIG[symbol]['timeframe']}周期数据，做出**最安全、最稳健**的交易决策。
+        **规则第一，利润第二**。任何可能导致资金大幅回撤的行为都是不可接受的。**仓位失控 = 满盘皆输 = 生无可恋**。
+        你必须展现出**极度的冷静和风险厌恶**。在分析中，始终将保护本金放在首位。
+        """
+        # --- 修改结束 ---
+        # --- 关键修改：使用 llm_client 和 LLM_MODEL_NAME ---
+        response = llm_client.chat.completions.create(
+            model=LLM_MODEL_NAME, # 使用从 .env 读取的模型名
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
             stream=False
         )
+        # --- 修改结束 ---
 
         result = response.choices[0].message.content
-        # print(f"[DEBUG] DeepSeek原始回复 for {symbol}: {result}") # 调试：打印原始回复 - 已注释
-        # --- 更健壮的JSON解析 ---
-        # 尝试提取最外层的JSON对象
-        start_idx = result.find('{')
-        end_idx = result.rfind('}') + 1
-        if start_idx == -1 or end_idx == 0:
-             print(f"在 {symbol} 的回复中未找到有效的JSON对象: {result}")
-             return None # 修正：找不到JSON对象时返回None
-        json_str = result[start_idx:end_idx]
-        # print(f"[DEBUG] 提取的JSON字符串 for {symbol}: {json_str}") # 调试：打印提取的JSON - 已注释
+        # --- 新增：打印 LLM 的完整原始回复到日志 ---
+        print(f"[THOUGHT PROCESS] LLM完整原始回复 for {symbol}:\n{result}")
+        # --- 修改结束 ---
+
+        # --- 关键修改：分离思考过程和JSON信号 ---
+        # 定义分隔符
+        separator = "---SIGNAL_JSON---"
+        # 查找分隔符的位置
+        separator_index = result.find(separator)
+
+        thought_process = ""
+        json_part = ""
+
+        if separator_index != -1:
+            # 如果找到了分隔符
+            # 分隔符之前的部分是思考过程 (去除末尾可能的空白)
+            thought_process = result[:separator_index].rstrip()
+            # 分隔符之后的部分是JSON (去除开头可能的空白)
+            json_part = result[separator_index + len(separator):].lstrip()
+        else:
+            # 如果没找到分隔符，回退到旧的逻辑，假设整个回复都是要解析的JSON或包含JSON的内容
+            print(f"[WARNING] 未在 {symbol} 的回复中找到分隔符 '{separator}'，使用备用解析方法。")
+            start_idx = result.find('{')
+            end_idx = result.rfind('}') + 1
+            if start_idx != -1 and end_idx != 0:
+                json_part = result[start_idx:end_idx]
+            else:
+                print(f"[ERROR] 在 {symbol} 的回复中无法找到有效的JSON对象: {result}")
+                return None
+        # --- 修改结束 ---
+
+        # --- 新增：打印分离出的思考过程 ---
+        if thought_process:
+             print(f"[THOUGHT PROCESS] Extracted Thought Process for {symbol}:\n{thought_process}")
+        # --- 修改结束 ---
+
+        # --- 更健壮的JSON解析 (作用于 json_part) ---
         signal_data = None
-        # 首先尝试使用标准json库解析
-        try:
-            signal_data = json.loads(json_str)
-            # print(f"[DEBUG] 使用标准json库解析 {symbol} 成功") # 调试：打印解析结果 - 已注释
-        except json.JSONDecodeError as e:
-            # print(f"[DEBUG] 标准json库解析 {symbol} 失败: {e}") # 调试：打印解析结果 - 已注释
-            # 如果标准库失败，尝试使用json5库，它更宽容
+        if json_part:
+            # 尝试提取最外层的JSON对象 (针对 json_part)
+            start_idx = json_part.find('{')
+            end_idx = json_part.rfind('}') + 1
+            if start_idx == -1 or end_idx == 0:
+                 print(f"[ERROR] 在 {symbol} 提取的JSON部分未找到有效的JSON对象: {json_part}")
+                 return None
+            final_json_str = json_part[start_idx:end_idx]
+            # print(f"[DEBUG] 提取的JSON字符串 for {symbol}: {final_json_str}") # 可选：打印提取的JSON
+
+            # 首先尝试使用标准json库解析
             try:
-                signal_data = json5.loads(json_str) # 修正：json5.loads 使用 ValueError
-                # print(f"[DEBUG] 使用json5库解析 {symbol} 成功") # 调试：打印解析结果 - 已注释
-            except ValueError as e2: # 修正：捕获 ValueError
-                # print(f"[DEBUG] json5库解析 {symbol} 也失败: {e2}") # 调试：打印解析结果 - 已注释
-                # 如果都失败了，尝试手动修复一些常见的问题（例如单引号）
-                # 这个修复非常基础，可能不适用于所有情况
-                import re
-                # 尝试将最外层的单引号键值对替换为双引号
-                # 这个正则表达式比较脆弱，仅作为最后手段
-                # 它查找 'key': 或 "key': 或 'key": 或 'key": 格式，并替换为 "key":
-                # 请注意，这可能会在值包含冒号时出错
-                repaired_json_str = re.sub(r"('|\")(\w+)('|\")(\s*:\s*)('|\")", r'"\2"\4"', json_str)
+                signal_data = json.loads(final_json_str)
+                # print(f"[DEBUG] 使用标准json库解析 {symbol} 成功") # 可选：打印解析结果
+            except json.JSONDecodeError as e:
+                # print(f"[DEBUG] 标准json库解析 {symbol} 失败: {e}") # 可选：打印解析结果
+                # 如果标准库失败，尝试使用json5库，它更宽容
                 try:
-                    signal_data = json.loads(repaired_json_str)
-                    # print(f"[DEBUG] 使用简单修复后解析 {symbol} 成功") # 调试：打印解析结果 - 已注释
-                except json.JSONDecodeError as e3:
-                    # print(f"[DEBUG] 简单修复后解析 {symbol} 仍失败: {e3}") # 调试：打印解析结果 - 已注释
-                    print(f"解析 {symbol} 的DeepSeek回复失败: 所有方法均尝试但失败。") # 提示解析失败
-                    print(f"原始回复: {result}") # 打印原始回复以便检查
-                    print(f"尝试解析的JSON片段: {json_str}") # 打印尝试解析的片段
-                    return None # 修正：所有方法都失败时返回None
-                    # 所有方法都失败
+                    signal_data = json5.loads(final_json_str) # 修正：json5.loads 使用 ValueError
+                    # print(f"[DEBUG] 使用json5库解析 {symbol} 成功") # 可选：打印解析结果
+                except ValueError as e2: # 修正：捕获 ValueError
+                    # print(f"[DEBUG] json5库解析 {symbol} 也失败: {e2}") # 可选：打印解析结果
+                    # 如果都失败了，尝试手动修复一些常见的问题（例如单引号）
+                    # 这个修复非常基础，可能不适用于所有情况
+                    import re
+                    # 尝试将最外层的单引号键值对替换为双引号
+                    # 这个正则表达式比较脆弱，仅作为最后手段
+                    # 它查找 'key': 或 "key': 或 'key": 或 'key": 格式，并替换为 "key":
+                    # 请注意，这可能会在值包含冒号时出错
+                    repaired_json_str = re.sub(r"('|\")(\w+)('|\")(\s*:\s*)('|\")", r'"\2"\4"', final_json_str)
+                    try:
+                        signal_data = json.loads(repaired_json_str)
+                        # print(f"[DEBUG] 使用简单修复后解析 {symbol} 成功") # 可选：打印解析结果
+                    except json.JSONDecodeError as e3:
+                        # print(f"[DEBUG] 简单修复后解析 {symbol} 仍失败: {e3}") # 可选：打印解析结果
+                        print(f"[ERROR] 解析 {symbol} 的LLM JSON回复失败: 所有方法均尝试但失败。") # 提示解析失败
+                        print(f"[ERROR] 原始JSON片段: {final_json_str}") # 打印尝试解析的片段
+                        return None # 修正：所有方法都失败时返回None
+                        # 所有方法都失败
 
         # --- 解析成功后的处理 ---
-        signal_data['timestamp'] = price_data['timestamp']
-        signal_history[symbol].append(signal_data)
-        if len(signal_history[symbol]) > 30:
-            signal_history[symbol].pop(0)
-
-        return signal_data
+        if signal_data: # 确保 signal_data 不是 None
+            signal_data['timestamp'] = price_data['timestamp']
+            signal_history[symbol].append(signal_data)
+            if len(signal_history[symbol]) > 30:
+                signal_history[symbol].pop(0)
+            return signal_data
+        else:
+            print(f"[ERROR] 未能成功解析 {symbol} 的信号数据。")
+            return None
     except Exception as e:
-        print(f"DeepSeek分析 {symbol} 失败: {e}")
+        print(f"[ERROR] LLM分析 {symbol} 失败: {e}")
         import traceback
         traceback.print_exc()
         return None
 
 def execute_trade(symbol, signal_data, price_data):
-    """执行指定币种的交易"""
+    """执行指定币种的交易 (动态仓位)"""
     config = TRADE_CONFIG[symbol]
     # --- 关键修改：直接从API获取执行前的当前持仓信息 ---
     # 调用 get_positions() 获取所有持仓
@@ -394,32 +504,99 @@ def execute_trade(symbol, signal_data, price_data):
     # 从中提取当前 symbol 的持仓信息
     current_position = all_current_positions.get(symbol)
     # --- 修改结束 ---
-    print(f"--- 执行 {symbol} 交易 ---")
+    print(f"--- 执行 {symbol} 交易 (动态仓位) ---")
     print(f"交易信号: {signal_data['signal']}")
     print(f"信心程度: {signal_data['confidence']}")
     print(f"理由: {signal_data['reason']}")
     print(f"止损: ${signal_data['stop_loss']:,.2f}")
     print(f"止盈: ${signal_data['take_profit']:,.2f}")
+    # --- 新增：打印建议的仓位百分比 ---
+    suggested_pct = signal_data.get('position_percentage', 0)
+    print(f"建议仓位百分比: {suggested_pct}%")
+    # --- 修改结束 ---
     print(f"当前持仓: {format_position_info(current_position)}") # 调用格式化函数
 
     if config['test_mode']:
         print("测试模式 - 仅模拟交易")
         return
 
+    # --- 新增：动态计算交易数量 ---
     try:
-        # 使用配置中的数量
-        amount = config['amount']
-        print(f"使用配置数量: {amount} {symbol.split('/')[0]}")
+        # 1. 获取账户总权益 (USDT)
+        #    注意：ccxt 的 balance 结构可能因交易所而异。
+        #    Binance futures 通常在 balance['total']['USDT'] 或 balance['USDT']['total']
+        balance = exchange.fetch_balance({'type': 'future'}) # 指定获取期货账户余额
+        # 尝试不同的键路径获取总权益
+        total_capital = None
+        if 'total' in balance and 'USDT' in balance['total']:
+            total_capital = balance['total']['USDT']
+        elif 'USDT' in balance and 'total' in balance['USDT']:
+            total_capital = balance['USDT']['total']
 
+        if total_capital is None:
+            print(f"[ERROR] 无法从余额信息中获取总权益: {balance}")
+            return # 或者可以 fallback 到一个默认值或环境变量
+
+        print(f"[DEBUG] 账户总权益 (USDT): {total_capital:.2f}")
+
+        # 2. 获取建议的百分比 (来自 LLM)
+        position_pct = float(suggested_pct) / 100.0 # 转换为小数
+        if position_pct <= 0 or position_pct > 1: # 简单校验，防止过大或负值
+             print(f"[WARNING] 建议的仓位百分比 ({suggested_pct}%) 无效或超出范围 (0-100%)，使用默认 1%。")
+             position_pct = 0.01 # Fallback to 1%
+
+        # 3. 计算本次交易应使用的 USDT 金额
+        trade_amount_usdt = total_capital * position_pct
+        print(f"[DEBUG] 计算出的交易金额 (USDT): {trade_amount_usdt:.2f}")
+
+        # 4. 根据当前价格计算需要交易的币数量
+        current_price = price_data['price']
+        if current_price <= 0:
+            print("[ERROR] 当前价格无效，无法计算交易数量。")
+            return
+        trade_amount_coin = trade_amount_usdt / current_price
+        print(f"[DEBUG] 按市价计算出的交易数量 ({symbol.split('/')[0]}): {trade_amount_coin:.6f}")
+
+        # 5. (重要) 根据交易所规则调整数量精度
+        #    这一步很关键，否则下单会失败。
+        #    ccxt 通常提供了方法来处理精度，但我们也可以手动处理。
+        #    这里采用一种简化但常用的方法：查询市场信息获取精度，然后截断。
+        market_info = exchange.market(symbol)
+        # 获取数量精度 (amount precision)
+        amount_precision = market_info['precision']['amount'] # 通常是小数点后几位, e.g., 3
+        # 计算精度因子 (例如 precision 3 -> factor 1000)
+        precision_factor = 10 ** amount_precision
+        # 截断到指定精度 (向下取整)
+        adjusted_amount_coin = math.floor(trade_amount_coin * precision_factor) / precision_factor
+        print(f"[DEBUG] 根据精度 {amount_precision} 调整后的交易数量 ({symbol.split('/')[0]}): {adjusted_amount_coin:.6f}")
+
+        # 如果调整后数量为0，则不交易
+        if adjusted_amount_coin <= 0:
+            print(f"[WARNING] 调整精度后交易数量为 0，取消交易。")
+            return
+
+        # 使用调整后的数量进行交易
+        amount = adjusted_amount_coin
+
+    except Exception as e:
+        print(f"[ERROR] 计算动态仓位时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return # 计算失败则不交易
+    # --- 修改结束 ---
+
+    print(f"使用计算出的数量: {amount} {symbol.split('/')[0]}") # 打印最终使用的数量
+
+    try:
         if signal_data['signal'] == 'BUY':
             if current_position and current_position['side'] == 'short':
                 print(f"平{symbol}空仓并开多仓...")
                 exchange.create_market_buy_order(symbol, current_position['size'])
                 time.sleep(1)
-                exchange.create_market_buy_order(symbol, amount)
+                exchange.create_market_buy_order(symbol, amount) # 使用动态数量
             elif not current_position:
                 print(f"开{symbol}多仓...")
-                exchange.create_market_buy_order(symbol, amount)
+                exchange.create_market_buy_order(symbol, amount) # 使用动态数量
             else:
                 print(f"已持有{symbol}多仓，无需操作")
 
@@ -428,10 +605,10 @@ def execute_trade(symbol, signal_data, price_data):
                 print(f"平{symbol}多仓并开空仓...")
                 exchange.create_market_sell_order(symbol, current_position['size'])
                 time.sleep(1)
-                exchange.create_market_sell_order(symbol, amount)
+                exchange.create_market_sell_order(symbol, amount) # 使用动态数量
             elif not current_position:
                 print(f"开{symbol}空仓...")
-                exchange.create_market_sell_order(symbol, amount)
+                exchange.create_market_sell_order(symbol, amount) # 使用动态数量
             else:
                 print(f"已持有{symbol}空仓，无需操作")
 
@@ -479,7 +656,7 @@ def main():
     print("多币种自动交易机器人启动成功！")
     print(f"配置的交易对: {list(TRADE_CONFIG.keys())}")
     for symbol, config in TRADE_CONFIG.items():
-        print(f"  - {symbol}: 杠杆 {config['leverage']}x, 周期 {config['timeframe']}, 数量 {config['amount']}, 测试模式: {config['test_mode']}")
+        print(f"  - {symbol}: 杠杆 {config['leverage']}x, 周期 {config['timeframe']}, 测试模式: {config['test_mode']}")
 
     if not setup_exchange():
         print("交易所初始化失败，程序退出")

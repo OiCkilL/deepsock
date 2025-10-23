@@ -1,8 +1,7 @@
-ccxt
 openai
+ccxt
 pandas
 schedule
-python-dotenv
-requests
-urllib3
 json5
+python-dotenv
+feedparser
