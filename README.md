@@ -23,7 +23,7 @@
 
 *   **克隆项目**:
     ```bash
-    git clone https://github.com/OiCkilL/deepsock.git
+    git clone <your-repo-url>
     cd deepsock
     ```
 *   **配置 `.env` 文件**:
@@ -45,6 +45,17 @@
         ```bash
         docker run --env-file .env deepsock python deepsock_ai.py
         ```
+*   **查看日志**:
+    *   如果您在后台运行容器（使用 `-d` 标志），或者想查看正在运行的容器的日志，可以使用 `docker logs` 命令。
+    *   **获取容器 ID 或名称**: 运行 `docker ps` 查看当前运行的容器列表。
+    *   **查看日志**:
+        ```bash
+        docker logs <CONTAINER_ID_OR_NAME>
+        ```
+    *   **实时跟踪日志**: 添加 `-f` 标志可以像 `tail -f` 一样实时查看日志输出。
+        ```bash
+        docker logs -f <CONTAINER_ID_OR_NAME>
+        ```
 
 ### 2.B. 使用 Docker Compose
 
@@ -58,6 +69,23 @@
         docker-compose up --build
         ```
 *   **后台运行**: 添加 `-d` 参数，例如 `docker-compose up -d --build`。
+*   **查看日志**:
+    *   **查看所有服务日志**:
+        ```bash
+        docker-compose logs
+        ```
+    *   **实时跟踪所有服务日志**:
+        ```bash
+        docker-compose logs -f
+        ```
+    *   **查看特定服务日志** (例如，如果您在 `docker-compose.yml` 中定义的服务名为 `deepsock`):
+        ```bash
+        docker-compose logs deepsock
+        ```
+    *   **实时跟踪特定服务日志**:
+        ```bash
+        docker-compose logs -f deepsock
+        ```
 *   **停止**: 在项目目录下运行 `docker-compose down`。
 
 ### 2.C. 本地运行 (不使用 Docker)
