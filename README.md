@@ -81,46 +81,46 @@
   * **增强版**(推荐):
 
     ```bash
-    docker-compose up --build
+    docker compose up --build
     ```
 
-    *(请确保 `docker-compose.yml` 中的 `command` 指向 `python deepsock_ai.py`)*
+    *(请确保 `compose.yml` 中的 `command` 指向 `python deepsock_ai.py`)*
 
-  * 标准版: 编辑 `docker-compose.yml`，将 `command` 改为 `python deepsock.py`，然后运行：
+  * 标准版: 编辑 `compose.yml`，将 `command` 改为 `python deepsock.py`，然后运行：
 
     ```bash
-    docker-compose up --build
+    docker compose up --build
     ```
 
-* **后台运行**: 添加 `-d` 参数，例如 `docker-compose up -d --build`。
+* **后台运行**: 添加 `-d` 参数，例如 `docker compose up -d --build`。
 
 * **查看日志**:
 
   * **查看所有服务日志**:
 
     ```bash
-    docker-compose logs
+    docker compose logs
     ```
 
   * **实时跟踪所有服务日志**:
 
     ```bash
-    docker-compose logs -f
+    docker compose logs -f
     ```
 
   * **查看特定服务日志** (例如，如果您在 `docker-compose.yml` 中定义的服务名为 `deepsock`):
 
     ```bash
-    docker-compose logs deepsock
+    docker compose logs deepsock
     ```
 
   * **实时跟踪特定服务日志**:
 
     ```bash
-    docker-compose logs -f deepsock
+    docker compose logs -f deepsock
     ```
 
-* **停止**: 在项目目录下运行 `docker-compose down`。
+* **停止**: 在项目目录下运行 `docker compose down`。
 
 ### 2.C. 本地运行 (不使用 Docker)
 
