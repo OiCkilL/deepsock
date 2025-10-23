@@ -1,8 +1,8 @@
 services:
   deepsock:
     build: .  # 从当前目录（项目根目录）构建 Dockerfile
-    command: python deepsock.py  # 默认启动命令，运行标准版
-    # command: python deepsock_ai.py  # 取消注释此行以运行增强版
+    # command: python deepsock.py  # 默认启动命令，运行标准版
+    command: python deepsock_ai.py  # 取消注释此行以运行增强版
     env_file:
       - .env  # 从当前目录加载 .env 文件作为环境变量
     # volumes:
