@@ -66,11 +66,11 @@
 *   **查看日志**:
     *   **查看所有服务日志**:
         ```bash
-        docker-compose logs
+        docker compose logs
         ```
     *   **实时跟踪所有服务日志**:
         ```bash
-        docker-compose logs -f
+        docker compose logs -f
         ```
     *   **查看特定服务日志** (服务名默认为 `deepsock`，定义在 `compose.yml` 中):
         
