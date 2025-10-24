@@ -1,10 +1,19 @@
 services:
   deepsock:
-    build: .  # 从当前目录（项目根目录）构建 Dockerfile
-    # command: python deepsock.py  # 默认启动命令，运行标准版
-    command: python deepsock_ai.py  # 取消注释此行以运行增强版
+    build: .  # Build the image from the current directory (where this docker-compose.yml is)
+    # Default command from Dockerfile will run deepsock.py
+    # To run a different script, uncomment and modify the line below:
+    # command: python some_other_script.py
     env_file:
-      - .env  # 从当前目录加载 .env 文件作为环境变量
-    # volumes:
-    #   - ./logs:/app/logs  # 可选：挂载日志目录到宿主机，取消注释以启用
-    restart: unless-stopped  # 容器退出时自动重启，除非手动停止
+      # Load environment variables from the .env file in the same directory
+      # Make sure to create and configure your .env file before running
+      - .env
+    volumes:
+      # Optional: Mount a local 'logs' directory to /app/logs in the container
+      # Uncomment the line below if your app writes logs and you want them persisted locally
+      # - ./logs:/app/logs
+
+      # Optional: Mount the .env file directly
+      # This allows changing config without rebuilding the image
+      # - ./.env:/app/.env:ro # :ro makes it read-only inside the container
+    restart: unless-stopped # Restart the container unless explicitly stopped
