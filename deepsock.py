@@ -1,3 +1,4 @@
+# deepsock.py
 import os
 import time
 import schedule
@@ -6,11 +7,27 @@ import ccxt
 import pandas as pd
 from datetime import datetime
 import json
-import json5 # 用于解析可能非标准的JSON
-import feedparser # 用于解析RSS
-import math # 用于数学计算 (floor)
+import json5  # 用于解析可能非标准的JSON
+import math   # 用于数学计算 (floor) - Essential import
+# 注意：feedparser 的导入被移到了后面，且变为条件性导入
+
+# 1. 首先加载 .env 文件
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv() # <-- 确保这行在使用 os.getenv 读取任何环境变量之前
+
+# 2. 然后读取并处理环境变量
+# --- 条件性导入 feedparser ---
+# 现在 os.getenv 才能正确读取 .env 中的 ENABLE_NEWS
+ENABLE_NEWS = os.getenv('ENABLE_NEWS', 'False').lower() in ['true', '1', 'yes', 'on']
+if ENABLE_NEWS:
+    try:
+        import feedparser  # 用于解析RSS
+        print("[INFO] 新闻模块已启用。")
+    except ImportError:
+        print("[WARNING] ENABLE_NEWS 设置为 True，但未安装 feedparser。新闻功能将被禁用。请运行 'pip install feedparser'")
+        ENABLE_NEWS = False
+else:
+    print("[INFO] 新闻模块已禁用 (ENABLE_NEWS=False)。")
 
 # --- 从 .env 读取 LLM 配置并初始化客户端 ---
 LLM_API_KEY = os.getenv('LLM_API_KEY')
@@ -33,28 +50,21 @@ exchange = ccxt.binance({
     'secret': os.getenv('BINANCE_SECRET'),
 })
 
-# --- 从 .env 读取多币种配置 ---
+# --- 从 .env 读取多币种配置 (移除 amounts) ---
 def parse_env_config():
-    """解析环境变量，返回配置字典"""
+    """解析环境变量，返回配置字典 (不包含固定 amounts)"""
     symbols = os.getenv('TRADE_SYMBOLS', '').split(',')
-    # amounts = os.getenv('TRADE_AMOUNTS', '').split(',') # 移除固定数量配置
     leverages = os.getenv('TRADE_LEVERAGES', '').split(',')
 
     # 验证数量是否一致 (只需要 symbols 和 leverages)
-    if not (len(symbols) == len(leverages)): # 修改验证条件
-        raise ValueError("TRADE_SYMBOLS 和 TRADE_LEVERAGES 的数量不匹配") # 修改错误信息
+    if not (len(symbols) == len(leverages)):
+        raise ValueError("TRADE_SYMBOLS 和 TRADE_LEVERAGES 的数量不匹配")
 
     config = {}
     for i in range(len(symbols)):
         symbol = symbols[i].strip()
         if not symbol:
             continue # 跳过空字符串
-
-        # 移除 amount 的解析逻辑
-        # try:
-        #     amount = float(amounts[i].strip())
-        # except ValueError:
-        #     raise ValueError(f"TRADE_AMOUNTS 中的值必须为数字: {amounts[i]}")
 
         try:
             leverage = int(leverages[i].strip())
@@ -96,35 +106,36 @@ def parse_risk_management_config():
 RISK_MANAGEMENT_CONFIG = parse_risk_management_config()
 print(f"[CONFIG] 风险管理配置: {RISK_MANAGEMENT_CONFIG}")
 
-
 # --- 全局变量 (改为字典以支持多币种) ---
 price_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
 signal_history = {symbol: [] for symbol in TRADE_CONFIG.keys()}
 positions = {symbol: None for symbol in TRADE_CONFIG.keys()}
 
-# --- 全局新闻变量 ---
-latest_news_text = "【最新市场新闻】\n无近期新闻。\n" # 初始化新闻内容
-last_news_hash = None # 用于存储上一次新闻内容的哈希值
+# --- 全局新闻变量 (条件性定义) ---
+if ENABLE_NEWS:
+    latest_news_text = "【最新市场新闻】\n无近期新闻。\n" # 初始化新闻内容
+    last_news_hash = None # 用于存储上一次新闻内容的哈希值
 
-# --- 从 .env 读取 RSS 配置 ---
-def parse_rss_config():
-    """解析环境变量中的RSS配置"""
-    rss_urls_str = os.getenv('RSS_FEED_URLS', '')
-    if not rss_urls_str:
-        raise ValueError("RSS_FEED_URLS 环境变量未设置或为空")
-    # 以逗号分割多个URL
-    urls = [url.strip() for url in rss_urls_str.split(',')]
-    # 验证每个URL是否以 http:// 或 https:// 开头
-    for url in urls:
-        if not url.startswith(('http://', 'https://')):
-            raise ValueError(f"RSS URL 格式无效: {url}")
-    return urls
+    # --- 从 .env 读取 RSS 配置 ---
+    def parse_rss_config():
+        """解析环境变量中的RSS配置"""
+        rss_urls_str = os.getenv('RSS_FEED_URLS', '')
+        if not rss_urls_str:
+            raise ValueError("RSS_FEED_URLS 环境变量未设置或为空")
+        # 以逗号分割多个URL
+        urls = [url.strip() for url in rss_urls_str.split(',')]
+        # 验证每个URL是否以 http:// 或 https:// 开头
+        for url in urls:
+            if not url.startswith(('http://', 'https://')):
+                raise ValueError(f"RSS URL 格式无效: {url}")
+        return urls
 
-RSS_FEED_URLS = parse_rss_config()
-RSS_CHECK_INTERVAL_MINUTES = int(os.getenv('RSS_CHECK_INTERVAL_MINUTES', '5'))
+    RSS_FEED_URLS = parse_rss_config()
+    RSS_CHECK_INTERVAL_MINUTES = int(os.getenv('RSS_CHECK_INTERVAL_MINUTES', '5'))
 
-print(f"[CONFIG] RSS 源: {RSS_FEED_URLS}")
-print(f"[CONFIG] RSS 检查间隔: {RSS_CHECK_INTERVAL_MINUTES} 分钟")
+    print(f"[CONFIG] RSS 源: {RSS_FEED_URLS}")
+    print(f"[CONFIG] RSS 检查间隔: {RSS_CHECK_INTERVAL_MINUTES} 分钟")
+# --- 修改结束 ---
 
 # --- 核心函数 ---
 def setup_exchange():
@@ -219,55 +230,58 @@ def format_position_info(pos):
     side_text = "多" if pos['side'] == 'long' else '空'
     return f"{side_text}仓, 数量: {pos['size']}, 入场价: ${pos['entry_price']:.2f}, 未实现盈亏: ${pos['unrealized_pnl']:.2f}USDT"
 
-def get_latest_news():
-    """获取多个 RSS 源的最新新闻"""
-    try:
-        all_entries = []
-        for feed_url in RSS_FEED_URLS:
-            print(f"[NEWS FETCH] 正在获取 {feed_url} ...")
-            feed = feedparser.parse(feed_url)
-            # 获取每个源最近的几条新闻（例如，最近5条）
-            recent_entries = feed.entries[:5] if feed.entries else []
-            all_entries.extend(recent_entries)
+# --- 新闻相关函数 (条件性定义) ---
+if ENABLE_NEWS:
+    def get_latest_news():
+        """获取多个 RSS 源的最新新闻"""
+        try:
+            all_entries = []
+            for feed_url in RSS_FEED_URLS:
+                print(f"[NEWS FETCH] 正在获取 {feed_url} ...")
+                feed = feedparser.parse(feed_url)
+                # 获取每个源最近的几条新闻（例如，最近5条）
+                recent_entries = feed.entries[:5] if feed.entries else []
+                all_entries.extend(recent_entries)
 
-        # 按发布时间排序，取最新的几条（例如，总共10条）
-        all_entries.sort(key=lambda x: x.get('published_parsed', x.get('updated_parsed', None)), reverse=True)
-        recent_entries = all_entries[:10]
+            # 按发布时间排序，取最新的几条（例如，总共10条）
+            all_entries.sort(key=lambda x: x.get('published_parsed', x.get('updated_parsed', None)), reverse=True)
+            recent_entries = all_entries[:10]
 
-        news_text_parts = ["【最新市场新闻】\n"]
-        for entry in recent_entries:
-            # 提取标题和摘要（description 通常包含摘要）
-            title = entry.get('title', 'No Title')
-            summary = entry.get('description', 'No Summary')
-            # 尝试获取发布日期，如果无法解析则跳过
-            pub_date_struct = entry.get('published_parsed', entry.get('updated_parsed', None))
-            if pub_date_struct:
-                pub_date = time.strftime('%Y-%m-%d %H:%M:%S', pub_date_struct)
-                news_text_parts.append(f"[{pub_date}] 标题: {title}\n摘要: {summary}\n---\n")
-            else:
-                news_text_parts.append(f"标题: {title}\n摘要: {summary}\n---\n")
+            news_text_parts = ["【最新市场新闻】\n"]
+            for entry in recent_entries:
+                # 提取标题和摘要（description 通常包含摘要）
+                title = entry.get('title', 'No Title')
+                summary = entry.get('description', 'No Summary')
+                # 尝试获取发布日期，如果无法解析则跳过
+                pub_date_struct = entry.get('published_parsed', entry.get('updated_parsed', None))
+                if pub_date_struct:
+                    pub_date = time.strftime('%Y-%m-%d %H:%M:%S', pub_date_struct)
+                    news_text_parts.append(f"[{pub_date}] 标题: {title}\n摘要: {summary}\n---\n")
+                else:
+                    news_text_parts.append(f"标题: {title}\n摘要: {summary}\n---\n")
 
-        return "".join(news_text_parts) if len(news_text_parts) > 1 else "【最新市场新闻】\n无近期新闻。\n"
-    except Exception as e:
-        print(f"获取新闻失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return "【最新市场新闻】\n获取新闻时发生错误。\n"
+            return "".join(news_text_parts) if len(news_text_parts) > 1 else "【最新市场新闻】\n无近期新闻。\n"
+        except Exception as e:
+            print(f"获取新闻失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return "【最新市场新闻】\n获取新闻时发生错误。\n"
 
-def fetch_and_update_news():
-    """获取新闻并更新全局变量，仅在内容变化时更新"""
-    global latest_news_text, last_news_hash
-    current_news_text = get_latest_news()
-    current_news_hash = hash(current_news_text) # 计算当前新闻内容的哈希值
+    def fetch_and_update_news():
+        """获取新闻并更新全局变量，仅在内容变化时更新"""
+        global latest_news_text, last_news_hash
+        current_news_text = get_latest_news()
+        current_news_hash = hash(current_news_text) # 计算当前新闻内容的哈希值
 
-    # 检查内容是否发生变化
-    if current_news_hash != last_news_hash:
-        print(f"[NEWS UPDATE] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 获取到新新闻:")
-        print(current_news_text)
-        latest_news_text = current_news_text
-        last_news_hash = current_news_hash # 更新哈希值
-    else:
-        print(f"[NEWS CHECK] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 新闻内容无变化，跳过更新。")
+        # 检查内容是否发生变化
+        if current_news_hash != last_news_hash:
+            print(f"[NEWS UPDATE] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 获取到新新闻:")
+            print(current_news_text)
+            latest_news_text = current_news_text
+            last_news_hash = current_news_hash # 更新哈希值
+        else:
+            print(f"[NEWS CHECK] 在 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 新闻内容无变化，跳过更新。")
+# --- 修改结束 ---
 
 def analyze_with_deepseek(price_data):
     """使用LLM分析指定币种的市场并生成交易信号"""
@@ -317,8 +331,10 @@ def analyze_with_deepseek(price_data):
 
     position_text = format_position_info(current_pos) # 调用格式化函数
 
-    # --- 从全局变量获取最新的新闻内容 ---
-    news_text = latest_news_text
+    # --- 新增：从全局变量获取最新的新闻内容 (条件性) ---
+    news_text = ""
+    if ENABLE_NEWS:
+        news_text = latest_news_text
     # --- 修改结束 ---
 
     # --- 新增：从全局变量获取风险管理配置 ---
@@ -335,7 +351,7 @@ def analyze_with_deepseek(price_data):
     {kline_text}
     {indicator_text}
     {signal_text}
-    {news_text} # 新增：将新闻信息加入Prompt
+    {news_text} # 新增：将新闻信息加入Prompt (如果启用)
     【当前行情】
     - 当前价格: ${price_data['price']:,.2f}
     - 时间: {price_data['timestamp']}
@@ -357,7 +373,7 @@ def analyze_with_deepseek(price_data):
     【分析与决策要求】
     1.  **首要任务：风险评估**。在给出任何交易信号之前，**必须**详细说明本次交易所涉及的具体风险（例如：若按建议止损，将损失账户总资金的百分之多少）。
     2.  **交易信号**: BUY(买入) / SELL(卖出) / HOLD(观望)。
-    3.  **决策理由**：简要分析市场趋势、技术指标、新闻事件如何影响价格，并明确指出风险点。
+    3.  **决策理由**：简要分析市场趋势、技术指标、成交量如何影响价格，并明确指出风险点。{"如果启用了新闻，请同时分析新闻事件对市场情绪和价格的潜在影响。" if ENABLE_NEWS else ""}
     4.  **止损价位**: 基于技术分析和风险管理规则设定一个**坚决**的止损价格。
     5.  **止盈价位**: 基于技术分析和风险管理规则设定一个现实的止盈价格。
     6.  **信号信心**: HIGH(高) / MEDIUM(中) / LOW(低)，并说明原因。
@@ -405,79 +421,47 @@ def analyze_with_deepseek(price_data):
         print(f"[THOUGHT PROCESS] LLM完整原始回复 for {symbol}:\n{result}")
         # --- 修改结束 ---
 
-        # --- 关键修改：分离思考过程和JSON信号 ---
-        # 定义分隔符
-        separator = "---SIGNAL_JSON---"
-        # 查找分隔符的位置
-        separator_index = result.find(separator)
-
-        thought_process = ""
-        json_part = ""
-
-        if separator_index != -1:
-            # 如果找到了分隔符
-            # 分隔符之前的部分是思考过程 (去除末尾可能的空白)
-            thought_process = result[:separator_index].rstrip()
-            # 分隔符之后的部分是JSON (去除开头可能的空白)
-            json_part = result[separator_index + len(separator):].lstrip()
-        else:
-            # 如果没找到分隔符，回退到旧的逻辑，假设整个回复都是要解析的JSON或包含JSON的内容
-            print(f"[WARNING] 未在 {symbol} 的回复中找到分隔符 '{separator}'，使用备用解析方法。")
-            start_idx = result.find('{')
-            end_idx = result.rfind('}') + 1
-            if start_idx != -1 and end_idx != 0:
-                json_part = result[start_idx:end_idx]
-            else:
-                print(f"[ERROR] 在 {symbol} 的回复中无法找到有效的JSON对象: {result}")
-                return None
-        # --- 修改结束 ---
-
-        # --- 新增：打印分离出的思考过程 ---
-        if thought_process:
-             print(f"[THOUGHT PROCESS] Extracted Thought Process for {symbol}:\n{thought_process}")
-        # --- 修改结束 ---
-
-        # --- 更健壮的JSON解析 (作用于 json_part) ---
+        # --- 更健壮的JSON解析 (作用于 result) ---
         signal_data = None
-        if json_part:
-            # 尝试提取最外层的JSON对象 (针对 json_part)
-            start_idx = json_part.find('{')
-            end_idx = json_part.rfind('}') + 1
-            if start_idx == -1 or end_idx == 0:
-                 print(f"[ERROR] 在 {symbol} 提取的JSON部分未找到有效的JSON对象: {json_part}")
-                 return None
-            final_json_str = json_part[start_idx:end_idx]
-            # print(f"[DEBUG] 提取的JSON字符串 for {symbol}: {final_json_str}") # 可选：打印提取的JSON
+        # 尝试提取最外层的JSON对象
+        start_idx = result.find('{')
+        end_idx = result.rfind('}') + 1
+        if start_idx == -1 or end_idx == 0:
+             print(f"在 {symbol} 的回复中未找到有效的JSON对象: {result}")
+             return None # 修正：找不到JSON对象时返回None
+        json_str = result[start_idx:end_idx]
+        # print(f"[DEBUG] 提取的JSON字符串 for {symbol}: {json_str}") # 可选：打印提取的JSON
 
-            # 首先尝试使用标准json库解析
+        # 首先尝试使用标准json库解析
+        try:
+            signal_data = json.loads(json_str)
+            # print(f"[DEBUG] 使用标准json库解析 {symbol} 成功") # 可选：打印解析结果
+        except json.JSONDecodeError as e:
+            # print(f"[DEBUG] 标准json库解析 {symbol} 失败: {e}") # 可选：打印解析结果
+            # 如果标准库失败，尝试使用json5库，它更宽容
             try:
-                signal_data = json.loads(final_json_str)
-                # print(f"[DEBUG] 使用标准json库解析 {symbol} 成功") # 可选：打印解析结果
-            except json.JSONDecodeError as e:
-                # print(f"[DEBUG] 标准json库解析 {symbol} 失败: {e}") # 可选：打印解析结果
-                # 如果标准库失败，尝试使用json5库，它更宽容
+                signal_data = json5.loads(json_str) # 修正：json5.loads 使用 ValueError
+                # print(f"[DEBUG] 使用json5库解析 {symbol} 成功") # 可选：打印解析结果
+            except ValueError as e2: # 修正：捕获 ValueError
+                # print(f"[DEBUG] json5库解析 {symbol} 也失败: {e2}") # 可选：打印解析结果
+                # 如果都失败了，尝试手动修复一些常见的问题（例如单引号）
+                # 这个修复非常基础，可能不适用于所有情况
+                import re
+                # 尝试将最外层的单引号键值对替换为双引号
+                # 这个正则表达式比较脆弱，仅作为最后手段
+                # 它查找 'key': 或 "key': 或 'key": 或 'key": 格式，并替换为 "key":
+                # 请注意，这可能会在值包含冒号时出错
+                repaired_json_str = re.sub(r"('|\")(\w+)('|\")(\s*:\s*)('|\")", r'"\2"\4"', json_str)
                 try:
-                    signal_data = json5.loads(final_json_str) # 修正：json5.loads 使用 ValueError
-                    # print(f"[DEBUG] 使用json5库解析 {symbol} 成功") # 可选：打印解析结果
-                except ValueError as e2: # 修正：捕获 ValueError
-                    # print(f"[DEBUG] json5库解析 {symbol} 也失败: {e2}") # 可选：打印解析结果
-                    # 如果都失败了，尝试手动修复一些常见的问题（例如单引号）
-                    # 这个修复非常基础，可能不适用于所有情况
-                    import re
-                    # 尝试将最外层的单引号键值对替换为双引号
-                    # 这个正则表达式比较脆弱，仅作为最后手段
-                    # 它查找 'key': 或 "key': 或 'key": 或 'key": 格式，并替换为 "key":
-                    # 请注意，这可能会在值包含冒号时出错
-                    repaired_json_str = re.sub(r"('|\")(\w+)('|\")(\s*:\s*)('|\")", r'"\2"\4"', final_json_str)
-                    try:
-                        signal_data = json.loads(repaired_json_str)
-                        # print(f"[DEBUG] 使用简单修复后解析 {symbol} 成功") # 可选：打印解析结果
-                    except json.JSONDecodeError as e3:
-                        # print(f"[DEBUG] 简单修复后解析 {symbol} 仍失败: {e3}") # 可选：打印解析结果
-                        print(f"[ERROR] 解析 {symbol} 的LLM JSON回复失败: 所有方法均尝试但失败。") # 提示解析失败
-                        print(f"[ERROR] 原始JSON片段: {final_json_str}") # 打印尝试解析的片段
-                        return None # 修正：所有方法都失败时返回None
-                        # 所有方法都失败
+                    signal_data = json.loads(repaired_json_str)
+                    # print(f"[DEBUG] 使用简单修复后解析 {symbol} 成功") # 可选：打印解析结果
+                except json.JSONDecodeError as e3:
+                    # print(f"[DEBUG] 简单修复后解析 {symbol} 仍失败: {e3}") # 可选：打印解析结果
+                    print(f"解析 {symbol} 的LLM JSON回复失败: 所有方法均尝试但失败。") # 提示解析失败
+                    print(f"原始回复: {result}") # 打印原始回复以便检查
+                    print(f"尝试解析的JSON片段: {json_str}") # 打印尝试解析的片段
+                    return None # 修正：所有方法都失败时返回None
+                    # 所有方法都失败
 
         # --- 解析成功后的处理 ---
         if signal_data: # 确保 signal_data 不是 None
@@ -508,8 +492,8 @@ def execute_trade(symbol, signal_data, price_data):
     print(f"交易信号: {signal_data['signal']}")
     print(f"信心程度: {signal_data['confidence']}")
     print(f"理由: {signal_data['reason']}")
-    print(f"止损: ${signal_data['stop_loss']:,.2f}")
-    print(f"止盈: ${signal_data['take_profit']:,.2f}")
+    print(f"止损: ${signal_data['stop_loss']:,.2f}" if signal_data['stop_loss'] is not None else "止损: N/A")
+    print(f"止盈: ${signal_data['take_profit']:,.2f}" if signal_data['take_profit'] is not None else "止盈: N/A")
     # --- 新增：打印建议的仓位百分比 ---
     suggested_pct = signal_data.get('position_percentage', 0)
     print(f"建议仓位百分比: {suggested_pct}%")
@@ -628,7 +612,7 @@ def execute_trade(symbol, signal_data, price_data):
         import traceback
         traceback.print_exc()
 
-def run_single_strategy(symbol, news_text=""):
+def run_single_strategy(symbol):
     """为单个币种运行完整的交易策略"""
     # 修正 print 语句中的换行符问题
     print("\n" + "=" * 60)
@@ -662,16 +646,17 @@ def main():
         print("交易所初始化失败，程序退出")
         return
 
-    # --- 新增：启动新闻获取调度任务 ---
-    print(f"启动新闻获取调度任务 (每 {RSS_CHECK_INTERVAL_MINUTES} 分钟检查一次)...")
-    schedule.every(RSS_CHECK_INTERVAL_MINUTES).minutes.do(fetch_and_update_news)
-    # 立即获取一次新闻
-    fetch_and_update_news()
+    # --- 新增：启动新闻获取调度任务 (条件性) ---
+    if ENABLE_NEWS:
+        print(f"启动新闻获取调度任务 (每 {RSS_CHECK_INTERVAL_MINUTES} 分钟检查一次)...")
+        schedule.every(RSS_CHECK_INTERVAL_MINUTES).minutes.do(fetch_and_update_news)
+        # 立即获取一次新闻
+        fetch_and_update_news()
     # --- 修改结束 ---
 
     def run_all_strategies():
         """为所有配置的币种运行一次策略，共享新闻"""
-        # 不再在这里获取新闻，因为新闻由独立任务更新
+        # 不再在这里获取新闻，因为新闻由独立任务更新 (如果启用)
         for symbol in TRADE_CONFIG.keys():
             run_single_strategy(symbol) # 不再传递news_text参数
 
