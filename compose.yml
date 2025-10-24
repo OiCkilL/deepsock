@@ -11,5 +11,5 @@ services:
     volumes:
       # Optional: Mount the .env file directly
       # This allows changing config without rebuilding the image
-      # - ./.env:/app/.env:ro # :ro makes it read-only inside the container
+      - ./.env:/app/.env:ro # :ro makes it read-only inside the container
     restart: unless-stopped # Restart the container unless explicitly stopped
