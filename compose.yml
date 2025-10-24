@@ -9,10 +9,6 @@ services:
       # Make sure to create and configure your .env file before running
       - .env
     volumes:
-      # Optional: Mount a local 'logs' directory to /app/logs in the container
-      # Uncomment the line below if your app writes logs and you want them persisted locally
-      # - ./logs:/app/logs
-
       # Optional: Mount the .env file directly
       # This allows changing config without rebuilding the image
       # - ./.env:/app/.env:ro # :ro makes it read-only inside the container
