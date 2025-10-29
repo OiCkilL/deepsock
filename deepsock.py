@@ -487,18 +487,34 @@ def execute_trade(symbol, signal_data, price_data):
     all_current_positions = get_positions()
     # 从中提取当前 symbol 的持仓信息
     current_position = all_current_positions.get(symbol)
-    # --- 修改结束 ---
-    print(f"--- 执行 {symbol} 交易 (动态仓位) ---")
-    print(f"交易信号: {signal_data['signal']}")
-    print(f"信心程度: {signal_data['confidence']}")
-    print(f"理由: {signal_data['reason']}")
-    print(f"止损: ${signal_data['stop_loss']:,.2f}" if signal_data['stop_loss'] is not None else "止损: N/A")
-    print(f"止盈: ${signal_data['take_profit']:,.2f}" if signal_data['take_profit'] is not None else "止盈: N/A")
-    # --- 新增：打印建议的仓位百分比 ---
-    suggested_pct = signal_data.get('position_percentage', 0)
-    print(f"建议仓位百分比: {suggested_pct}%")
-    # --- 修改结束 ---
-    print(f"当前持仓: {format_position_info(current_position)}") # 调用格式化函数
+# --- 修改开始 ---
+print(f"--- 执行 {symbol} 交易 (动态仓位) ---")
+print(f"交易信号: {signal_data['signal']}")
+print(f"信心程度: {signal_data['confidence']}")
+print(f"理由: {signal_data['reason']}")
+
+# 关键修改：在打印前将 stop_loss 和 take_profit 转换为 float
+stop_loss_val = signal_data.get('stop_loss')
+take_profit_val = signal_data.get('take_profit')
+
+# 使用 try-except 来安全地转换，避免因非数字字符串导致程序崩溃
+try:
+    stop_loss_float = float(stop_loss_val) if stop_loss_val is not None else None
+except (TypeError, ValueError):
+    stop_loss_float = None
+
+try:
+    take_profit_float = float(take_profit_val) if take_profit_val is not None else None
+except (TypeError, ValueError):
+    take_profit_float = None
+
+# 然后使用转换后的值进行打印
+print(f"止损: ${stop_loss_float:,.2f}" if stop_loss_float is not None else "止损: N/A")
+print(f"止盈: ${take_profit_float:,.2f}" if take_profit_float is not None else "止盈: N/A")
+# --- 修改结束 ---
+
+print(f"建议仓位百分比: {suggested_pct}%")
+print(f"当前持仓: {format_position_info(current_position)}") # 调用格式化函数
 
     if config['test_mode']:
         print("测试模式 - 仅模拟交易")
